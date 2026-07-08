@@ -43,6 +43,7 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
     else "-" end;
   def path_of($t):
     if $t.paths.home.present then $t.paths.home.path
+    elif $t.paths.home.path != null then $t.paths.home.path + " (absent)"
     elif $t.paths.worktree.present then $t.paths.worktree.path
     elif $t.paths.worktree.path != null then $t.paths.worktree.path + " (absent)"
     else "-" end;
@@ -51,8 +52,12 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
     else $t.actions.watch end;
   def task_row($t):
     "| \($t.id) | \($t.current_state.state) / \($t.current_state.source) | \($t.kind) | \(dash($t.backlog.repo // $t.project)) | \($t.backend) | \(endpoint_of($t)) | \(artifact($t)) | \(path_of($t)) | \(action_of($t)) |";
+  def blocker($r):
+    if ($r.blocked_by // "") == "" then "-"
+    elif ($r.blocked_reason // "") == "" then $r.blocked_by
+    else "\($r.blocked_by) - \($r.blocked_reason)" end;
   def backlog_row($r):
-    "| \($r.id // "-") | \(dash($r.title // $r.raw)) | \(dash($r.repo)) | \(dash($r.kind)) | \(dash($r.blocked_by)) | \(dash($r.pr_url // $r.report_path)) |";
+    "| \($r.id // "-") | \(dash($r.title // $r.raw)) | \(dash($r.repo)) | \(dash($r.kind)) | \(blocker($r)) | \(dash($r.pr_url // $r.report_path // $r.local_note)) |";
 
   "# Fleet View",
   "",

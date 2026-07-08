@@ -208,6 +208,7 @@ test_backlog_tasks_axi_forms_and_overrides() {
 ## Queued
 - [ ] queued-comma - Queued Comma Task (repo: beta, since 2026-07-08) (kind: ship)
 - [ ] parenthetical-title - Refresh sidebar (mobile) (repo: beta) (kind: ship)
+- [ ] blocked-reason - Blocked Reason (repo: beta) (kind: ship) blocked-by: queued-comma - waits on queued-comma
 
 ## Done
 - [x] done-comma - Done Comma Task https://github.com/kunchenguid/firstmate/pull/42 (repo: gamma, merged 2026-07-09) (kind: ship)
@@ -238,6 +239,7 @@ EOF
       and .repo == "alpha"
       and .since == "2026-07-07"
       and .kind == "scout"
+      and .title == "Bold Task"
       and .body_excerpt == "Bold body survives."
       and .report_path == "data/bold-task/report.md"
   ' >/dev/null || fail "bold in-flight backlog row did not parse"
@@ -250,6 +252,13 @@ EOF
     | .title == "Refresh sidebar (mobile)" and .repo == "beta"
   ' >/dev/null || fail "title parenthetical was stripped with metadata"
   printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "blocked-reason")
+    | .title == "Blocked Reason"
+      and .repo == "beta"
+      and .blocked_by == "queued-comma"
+      and .blocked_reason == "waits on queued-comma"
+  ' >/dev/null || fail "blocked suffix did not parse into title and reason"
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-comma")
     | .repo == "gamma"
       and .merged == "2026-07-09"
@@ -258,12 +267,15 @@ EOF
   printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "reported-comma")
     | .repo == "gamma"
+      and .title == "Reported Scout"
       and .reported == "2026-07-10"
       and .completion == {verb:"reported",date:"2026-07-10"}
   ' >/dev/null || fail "reported closure metadata did not parse"
   printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-note")
     | .repo == "delta"
+      and .title == "Done Note"
+      and .local_note == "local main"
       and .done == "2026-07-11"
       and .completion == {verb:"done",date:"2026-07-11"}
   ' >/dev/null || fail "done closure metadata did not parse"
@@ -276,6 +288,10 @@ EOF
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$VIEW")
   assert_contains "$view" "| bold-task | done / status-log | scout | alpha | tmux | present | $data/bold-task/report.md" \
     "view should render bold in-flight row from snapshot"
+  assert_contains "$view" "| blocked-reason | Blocked Reason | beta | ship | queued-comma - waits on queued-comma | - |" \
+    "view should render blocked reason without title metadata"
+  assert_contains "$view" "| done-note | Done Note | delta | ship | - | local main |" \
+    "view should render local-only done artifact outside the title"
   pass "snapshot parses tasks-axi rows and respects operational overrides"
 }
 
@@ -316,6 +332,8 @@ test_view_renders_dead_secondmate_agent_status() {
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
   assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead |" \
     "view should distinguish a present secondmate endpoint from a dead agent"
+  assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead | - | $home/secondmate-home (absent) |" \
+    "view should show a recorded missing secondmate home path"
   pass "fleet view renders secondmate agent liveness"
 }
 

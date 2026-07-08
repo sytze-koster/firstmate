@@ -175,13 +175,29 @@ backlog_json() {
     def strip_trailing_metadata:
       reduce range(0; 20) as $_ (.;
         sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
+    def strip_title_artifacts:
+      sub("[[:space:]]+-[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
+      | sub("[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
+      | sub("[[:space:]]+-[[:space:]]+local main$"; "")
+      | sub("[[:space:]]+local main$"; "");
+    def clean_title:
+      strip_trailing_metadata
+      | strip_title_artifacts
+      | gsub("[[:space:]]+"; " ")
+      | trim;
     def title_of($rest):
       $rest
       | gsub("https?://[^[:space:])\"]+"; "")
+      | sub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:])]+[[:space:]]+-[[:space:]]+.*$"; "")
       | gsub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:]]+"; "")
-      | strip_trailing_metadata
-      | gsub("[[:space:]]+"; " ")
-      | trim;
+      | clean_title;
+    def blocked_reason($rest):
+      cap($rest; ".*blocked-by:[[:space:]]*[^[:space:])]+[[:space:]]+-[[:space:]]*(?<v>.*)$") as $reason
+      | if $reason == null then null
+        else ($reason | clean_title | if . == "" then null else . end)
+        end;
+    def local_note($rest):
+      cap(($rest | strip_trailing_metadata); ".*(?:^|[[:space:]]+-[[:space:]]+|[[:space:]])(?<v>local main)$");
     def completion($rest):
       (metadata_word($rest; "merged")) as $merged
       | (metadata_word($rest; "reported")) as $reported
@@ -213,6 +229,7 @@ backlog_json() {
              kind:metadata($rest; "kind"),
              priority:metadata($rest; "priority"),
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
+             blocked_reason:blocked_reason($rest),
              since:metadata_word($rest; "since"),
              merged:metadata_word($rest; "merged"),
              reported:metadata_word($rest; "reported"),
@@ -221,6 +238,7 @@ backlog_json() {
              links:links($rest),
              pr_url:((links($rest) | map(select(test("/pull/[0-9]+"))) | .[0]) // null),
              report_path:cap($rest; ".*(?<v>data/[^[:space:])]+/report\\.md).*"),
+             local_note:local_note($rest),
              raw:$line,
              body_lines:[],
              body_excerpt:null}
