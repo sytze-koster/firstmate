@@ -143,9 +143,9 @@ test_fixture_snapshot_json() {
       and .current_state.source == "pane"
       and .pr.url == "https://github.com/kunchenguid/firstmate/pull/9"
       and .backlog.body_excerpt == "Preserve this detail for bearings."
-      and .hints.pending_decision == true
+      and .hints.pending_decision == false
       and .paths.status_log.kind == "event_history"
-  ' >/dev/null || fail "ship task state, PR, body, and event hints missing"
+  ' >/dev/null || fail "ship task state, PR, body, and stale event hints wrong"
   printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "scout-task")
     | .paths.report.present == true
@@ -171,6 +171,62 @@ test_fixture_snapshot_json() {
     | .state == "done" and .pr_url == "https://github.com/kunchenguid/firstmate/pull/7"
   ' >/dev/null || fail "done backlog PR row missing"
   pass "fixture snapshot covers task rows, backlog rows, pointers, and stable ordering"
+}
+
+test_event_hints_follow_reconciled_current_state() {
+  local home fakebin out
+  home=$(make_home event-hints)
+  mkdir -p \
+    "$home/projects/active-decision" \
+    "$home/projects/active-blocked" \
+    "$home/projects/stale-decision" \
+    "$home/projects/stale-blocked"
+  fm_write_meta "$home/state/active-decision.meta" \
+    "window=firstmate:fm-active-decision" \
+    "worktree=$home/projects/active-decision" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'needs-decision: choose an API shape\n' > "$home/state/active-decision.status"
+  fm_write_meta "$home/state/active-blocked.meta" \
+    "window=firstmate:fm-active-blocked" \
+    "worktree=$home/projects/active-blocked" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'blocked: waiting on access\n' > "$home/state/active-blocked.status"
+  fm_write_meta "$home/state/stale-decision.meta" \
+    "window=firstmate:fm-stale-decision-ship-task" \
+    "worktree=$home/projects/stale-decision" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'needs-decision: already answered\n' > "$home/state/stale-decision.status"
+  fm_write_meta "$home/state/stale-blocked.meta" \
+    "window=firstmate:fm-stale-blocked-ship-task" \
+    "worktree=$home/projects/stale-blocked" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'blocked: old failure\n' > "$home/state/stale-blocked.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    def task($id): (.tasks[] | select(.id == $id));
+    task("active-decision").current_state.state == "parked"
+      and task("active-decision").hints.pending_decision == true
+      and task("active-blocked").current_state.state == "blocked"
+      and task("active-blocked").hints.blocked_event == true
+      and task("stale-decision").current_state.state == "working"
+      and task("stale-decision").hints.pending_decision == false
+      and task("stale-blocked").current_state.state == "working"
+      and task("stale-blocked").hints.blocked_event == false
+  ' >/dev/null || fail "event hints must follow reconciled current state"
+  pass "snapshot event hints follow reconciled current state"
 }
 
 test_scout_reports_include_teardown_reports() {
@@ -339,6 +395,7 @@ test_view_renders_dead_secondmate_agent_status() {
 
 test_empty_fleet_json
 test_fixture_snapshot_json
+test_event_hints_follow_reconciled_current_state
 test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot

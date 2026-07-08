@@ -271,7 +271,7 @@ backlog_json() {
 task_json_lines() {
   local meta id kind harness mode yolo project worktree home projects backend target status_log report_path
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
-  local last_event_raw last_event_verb pending_decision blocked_event report_present=0 pr_from_status
+  local last_event_raw last_event_verb current_state pending_decision blocked_event report_present=0 pr_from_status
 
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -304,10 +304,11 @@ task_json_lines() {
     event_json=$(status_event_json "$status_log")
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     last_event_verb=$(printf '%s' "$event_json" | jq -r '.last_event.state // ""')
+    current_state=$(printf '%s' "$current_json" | jq -r '.state // ""')
     pending_decision=0
     blocked_event=0
-    [ "$last_event_verb" = needs-decision ] && pending_decision=1
-    [ "$last_event_verb" = blocked ] && blocked_event=1
+    [ "$last_event_verb" = needs-decision ] && [ "$current_state" = parked ] && pending_decision=1
+    [ "$last_event_verb" = blocked ] && [ "$current_state" = blocked ] && blocked_event=1
 
     endpoint_exists=null
     if [ -n "$target" ]; then
