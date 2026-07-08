@@ -33,9 +33,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="$FM_HOME/data"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-PROJECTS="$FM_HOME/projects"
+PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 BACKLOG="$DATA/backlog.md"
 
 # shellcheck source=bin/fm-backend.sh
@@ -99,7 +99,15 @@ line_note() {  # <line>
 
 crew_state_json() {  # <id>
   local id=$1 raw rest state source detail sep
-  raw=$(FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true)
+  raw=$(
+    FM_ROOT_OVERRIDE="$FM_ROOT" \
+      FM_HOME="$FM_HOME" \
+      FM_STATE_OVERRIDE="$STATE" \
+      FM_DATA_OVERRIDE="$DATA" \
+      FM_PROJECTS_OVERRIDE="$PROJECTS" \
+      FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
+  )
   raw=$(printf '%s\n' "$raw" | head -1)
   sep=' · '
   state=unknown
@@ -156,7 +164,13 @@ backlog_json() {
       elif . == "Queued" then "queued"
       elif . == "Done" then "done"
       else null end;
-    def cap($rest; $re): (($rest | capture($re)?) // {} | .v) // null;
+    def cap($rest; $re):
+      (((($rest | capture($re)?) // {}) | .v) // null) as $v
+      | if $v == null then null else ($v | trim) end;
+    def metadata($rest; $key):
+      cap($rest; ".*(?:\\(|,[[:space:]]*)" + $key + ":[[:space:]]*(?<v>[^,)]*)");
+    def metadata_word($rest; $key):
+      cap($rest; ".*(?:\\(|,[[:space:]]*)" + $key + "[[:space:]]+(?<v>[^,)]*)");
     def links($rest): [$rest | scan("https?://[^[:space:])\"]+")];
     def title_of($rest):
       $rest
@@ -165,8 +179,15 @@ backlog_json() {
       | gsub("[[:space:]]*\\([^)]*\\)"; "")
       | gsub("[[:space:]]+"; " ")
       | trim;
+    def row_match($line):
+      (($line | capture("^[-*][[:space:]]+\\[(?<check>[ xX])\\][[:space:]]+(?<id>[^[:space:]]+)[[:space:]]+-[[:space:]]+(?<rest>.*)$")?) //
+       (($line | capture("^[-*][[:space:]]+\\*\\*(?<id>[^*]+)\\*\\*[[:space:]]+-[[:space:]]+(?<rest>.*)$")?)
+        | if . == null then null else . + {check:" "} end));
+    def structured_row($line):
+      ($line | test("^[-*][[:space:]]+\\[[ xX]\\][[:space:]]+[^[:space:]]+[[:space:]]+-[[:space:]]+"))
+      or ($line | test("^[-*][[:space:]]+\\*\\*[^*]+\\*\\*[[:space:]]+-[[:space:]]+"));
     def parse_row($line; $section; $order):
-      ($line | capture("^[-*][[:space:]]+\\[(?<check>[ xX])\\][[:space:]]+(?<id>[^[:space:]]+)[[:space:]]+-[[:space:]]+(?<rest>.*)$")?) as $m
+      row_match($line) as $m
       | if $m == null then
           {order:$order,state:$section,structured:false,id:null,raw:$line,body_lines:[],body_excerpt:null}
         else
@@ -174,15 +195,15 @@ backlog_json() {
           | {order:$order,
              state:$section,
              structured:true,
-             id:$m.id,
+             id:($m.id | trim),
              checked:($m.check | test("[xX]")),
              title:title_of($rest),
-             repo:cap($rest; ".*\\(repo:[[:space:]]*(?<v>[^)]*)\\).*"),
-             kind:cap($rest; ".*\\(kind:[[:space:]]*(?<v>[^)]*)\\).*"),
-             priority:cap($rest; ".*\\(priority:[[:space:]]*(?<v>[^)]*)\\).*"),
+             repo:metadata($rest; "repo"),
+             kind:metadata($rest; "kind"),
+             priority:metadata($rest; "priority"),
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
-             since:cap($rest; ".*\\(since[[:space:]]+(?<v>[^)]*)\\).*"),
-             merged:cap($rest; ".*\\(merged[[:space:]]+(?<v>[^)]*)\\).*"),
+             since:metadata_word($rest; "since"),
+             merged:metadata_word($rest; "merged"),
              links:links($rest),
              pr_url:((links($rest) | map(select(test("/pull/[0-9]+"))) | .[0]) // null),
              report_path:cap($rest; ".*(?<v>data/[^[:space:])]+/report\\.md).*"),
@@ -196,7 +217,7 @@ backlog_json() {
          .section = (($line | sub("^##[[:space:]]+";"") | trim) | section_state)
        elif .section == null or ($line | trim) == "" then
          .
-       elif ($line | test("^[-*][[:space:]]+\\[[ xX]\\][[:space:]]+")) then
+       elif structured_row($line) then
          .order += 1
          | .records += [parse_row($line; .section; .order)]
        elif ((.records | length) > 0 and (.records[-1].structured == true) and ($line | test("^[[:space:]]+"))) then

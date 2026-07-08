@@ -166,6 +166,70 @@ test_fixture_snapshot_json() {
   pass "fixture snapshot covers task rows, backlog rows, pointers, and stable ordering"
 }
 
+test_backlog_tasks_axi_forms_and_overrides() {
+  local home data projects fakebin out view
+  home=$(make_home overrides)
+  data=$TMP_ROOT/override-data
+  projects=$TMP_ROOT/override-projects
+  mkdir -p "$data/bold-task" "$projects/bold-worktree"
+  cat > "$data/backlog.md" <<EOF
+## In flight
+- **bold-task** - Bold Task data/bold-task/report.md (repo: alpha, since 2026-07-07) (kind: scout)
+  Bold body survives.
+
+## Queued
+- [ ] queued-comma - Queued Comma Task (repo: beta, since 2026-07-08) (kind: ship)
+
+## Done
+- [x] done-comma - Done Comma Task https://github.com/kunchenguid/firstmate/pull/42 (repo: gamma, merged 2026-07-09) (kind: ship)
+EOF
+  printf '# Bold Scout\n' > "$data/bold-task/report.md"
+  fm_write_meta "$home/state/bold-task.meta" \
+    "window=firstmate:fm-bold-task" \
+    "worktree=$projects/bold-worktree" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=scout" \
+    "mode=scout"
+  printf 'done: report ready\n' > "$home/state/bold-task.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e --arg data "$data" --arg projects "$projects" '
+    .roots.data == $data
+      and .roots.projects == $projects
+      and .backlog.path == ($data + "/backlog.md")
+  ' >/dev/null || fail "snapshot did not respect data/projects overrides"
+  printf '%s' "$out" | jq -e --arg data "$data" '
+    .backlog.records[] | select(.id == "bold-task")
+    | .structured == true
+      and .state == "in_flight"
+      and .checked == false
+      and .repo == "alpha"
+      and .since == "2026-07-07"
+      and .kind == "scout"
+      and .body_excerpt == "Bold body survives."
+      and .report_path == "data/bold-task/report.md"
+  ' >/dev/null || fail "bold in-flight backlog row did not parse"
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "queued-comma")
+    | .repo == "beta" and .since == "2026-07-08"
+  ' >/dev/null || fail "queued comma metadata did not split"
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "done-comma")
+    | .repo == "gamma" and .merged == "2026-07-09"
+  ' >/dev/null || fail "done comma metadata did not split"
+  printf '%s' "$out" | jq -e --arg data "$data" '
+    .tasks[] | select(.id == "bold-task")
+    | .backlog.id == "bold-task"
+      and .paths.report.path == ($data + "/bold-task/report.md")
+      and .paths.report.present == true
+  ' >/dev/null || fail "bold task did not join to override-backed backlog and report"
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$VIEW")
+  assert_contains "$view" "| bold-task | done / status-log | scout | alpha | tmux | present | $data/bold-task/report.md" \
+    "view should render bold in-flight row from snapshot"
+  pass "snapshot parses tasks-axi rows and respects operational overrides"
+}
+
 test_view_renders_snapshot() {
   local home fakebin view
   home=$(make_home view)
@@ -187,4 +251,5 @@ test_view_renders_snapshot() {
 
 test_empty_fleet_json
 test_fixture_snapshot_json
+test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
