@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Behavior tests for the read-only fleet snapshot and its human renderer.
+set -u
+
+# shellcheck source=tests/lib.sh
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
+VIEW="$ROOT/bin/fm-fleet-view.sh"
+TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
+
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+
+make_fakebin() {  # <dir>
+  local fb
+  fb=$(fm_fakebin "$1")
+  cat > "$fb/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+target=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-t" ]; then target=$arg; fi
+  prev=$arg
+done
+case "${1:-}" in
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf 'codex\n' ;;
+      *) printf '%%1\n' ;;
+    esac
+    ;;
+  capture-pane)
+    case "$target" in
+      *ship-task*) printf 'work in progress\nesc to interrupt\n' ;;
+      *) printf 'all quiet\n> \n' ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/no-mistakes" "$fb/tmux"
+  printf '%s\n' "$fb"
+}
+
+make_home() {  # <name>
+  local home=$TMP_ROOT/$1
+  mkdir -p "$home/state" "$home/data" "$home/projects" "$home/config"
+  printf '%s\n' "$home"
+}
+
+write_fixture() {  # <home>
+  local home=$1
+  mkdir -p "$home/projects/alpha-worktree" "$home/projects/scout-worktree" "$home/secondmate-home"
+  cat > "$home/data/backlog.md" <<EOF
+## In flight
+- [ ] scout-task - Scout Task data/scout-task/report.md (repo: alpha) (kind: scout) (since 2026-07-07)
+- [ ] ship-task - Ship Task https://github.com/kunchenguid/firstmate/pull/9 (repo: alpha) (kind: ship) (priority: 2) (since 2026-07-07)
+  Preserve this detail for bearings.
+
+## Queued
+- [ ] queued-task - Queued Task blocked-by: ship-task (repo: alpha) (kind: ship) (since 2026-07-08)
+handoff note without canonical syntax
+
+## Done
+- [x] done-task - Done Task https://github.com/kunchenguid/firstmate/pull/7 (repo: alpha) (kind: ship) (merged 2026-07-06)
+EOF
+  mkdir -p "$home/data/scout-task"
+  printf '# Scout\n' > "$home/data/scout-task/report.md"
+  fm_write_meta "$home/state/ship-task.meta" \
+    "window=firstmate:fm-ship-task" \
+    "worktree=$home/projects/alpha-worktree" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship" \
+    "yolo=off" \
+    "pr=https://github.com/kunchenguid/firstmate/pull/9"
+  printf 'needs-decision: choose an API shape\n' > "$home/state/ship-task.status"
+  fm_write_meta "$home/state/scout-task.meta" \
+    "window=firstmate:fm-scout-task" \
+    "worktree=$home/projects/scout-worktree" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=scout" \
+    "mode=scout" \
+    "yolo=off"
+  printf 'done: report ready\n' > "$home/state/scout-task.status"
+  fm_write_meta "$home/state/secondmate-task.meta" \
+    "window=firstmate:fm-secondmate-task" \
+    "worktree=$home/secondmate-home" \
+    "project=$home/secondmate-home" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "home=$home/secondmate-home" \
+    "projects=alpha,beta"
+  printf 'working: watching delegated scope\n' > "$home/state/secondmate-task.status"
+  fm_write_meta "$home/state/cmux-task.meta" \
+    "backend=cmux" \
+    "window=workspace:surface" \
+    "worktree=$home/projects/missing-cmux" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+}
+
+test_empty_fleet_json() {
+  local home out view
+  home=$(make_home empty)
+  out=$(FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '.schema == "fm-fleet-snapshot.v1" and .backlog.present == false and (.tasks|length == 0)' >/dev/null \
+    || fail "empty snapshot schema or absence markers wrong: $out"
+  view=$(FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "No live task metadata found." "empty fleet view should say no live metadata"
+  pass "empty fleet snapshot and view use explicit absence markers"
+}
+
+test_fixture_snapshot_json() {
+  local home fakebin out ids
+  home=$(make_home fixture)
+  write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e . >/dev/null || fail "snapshot must be valid JSON"
+  ids=$(printf '%s' "$out" | jq -r '.tasks | map(.id) | join(",")')
+  [ "$ids" = "cmux-task,scout-task,secondmate-task,ship-task" ] \
+    || fail "task ordering must be stable by id, got $ids"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "ship-task")
+    | .current_state.state == "working"
+      and .current_state.source == "pane"
+      and .pr.url == "https://github.com/kunchenguid/firstmate/pull/9"
+      and .backlog.body_excerpt == "Preserve this detail for bearings."
+      and .hints.pending_decision == true
+      and .paths.status_log.kind == "event_history"
+  ' >/dev/null || fail "ship task state, PR, body, and event hints missing"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "scout-task")
+    | .paths.report.present == true
+      and .hints.scout_report_present == true
+  ' >/dev/null || fail "scout report pointer missing"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "secondmate-task")
+    | .actions.watch | contains("do not routinely fm-peek")
+  ' >/dev/null || fail "secondmate return-channel guidance missing"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "cmux-task")
+    | .backend == "cmux"
+      and .paths.worktree.present == false
+      and .current_state.state == "unknown"
+  ' >/dev/null || fail "cmux missing-file row missing"
+  printf '%s' "$out" | jq -e '
+    [.backlog.records[] | select(.state == "queued")] | length == 2
+  ' >/dev/null || fail "queued canonical and unstructured backlog records missing"
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "done-task")
+    | .state == "done" and .pr_url == "https://github.com/kunchenguid/firstmate/pull/7"
+  ' >/dev/null || fail "done backlog PR row missing"
+  pass "fixture snapshot covers task rows, backlog rows, pointers, and stable ordering"
+}
+
+test_view_renders_snapshot() {
+  local home fakebin view
+  home=$(make_home view)
+  write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "| ship-task | working / pane | ship | alpha | tmux | present | https://github.com/kunchenguid/firstmate/pull/9" \
+    "view should render ship row from snapshot"
+  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | -" \
+    "view should render queued backlog row"
+  assert_contains "$view" "| done-task | Done Task | alpha | ship | - | https://github.com/kunchenguid/firstmate/pull/7 |" \
+    "view should render done backlog row"
+  assert_contains "$view" "bin/fm-send.sh fm-secondmate-task" \
+    "view should show secondmate send guidance"
+  assert_not_contains "$view" "fm-peek.sh fm-secondmate-task" \
+    "view must not tell firstmate to routinely peek secondmates"
+  pass "fleet view renders the snapshot without secondmate peek guidance"
+}
+
+test_empty_fleet_json
+test_fixture_snapshot_json
+test_view_renders_snapshot
