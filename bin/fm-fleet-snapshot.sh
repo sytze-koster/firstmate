@@ -376,8 +376,24 @@ task_json_lines() {
   done | jq -s 'sort_by(.id)'
 }
 
+scout_report_lines() {
+  local report id
+  if [ ! -d "$DATA" ]; then
+    jq -n '[]'
+    return 0
+  fi
+  LC_ALL=C find "$DATA" -mindepth 2 -maxdepth 2 -type f -name report.md -print \
+    | sort \
+    | while IFS= read -r report; do
+      id=$(basename "$(dirname "$report")")
+      jq -n --arg id "$id" --arg path "$report" '{id:$id,path:$path}'
+    done \
+    | jq -s 'sort_by(.id)'
+}
+
 BACKLOG_JSON=$(backlog_json)
 TASKS_JSON=$(task_json_lines)
+SCOUT_REPORTS_JSON=$(scout_report_lines)
 
 jq -n \
   --arg fm_home "$FM_HOME" \
@@ -388,14 +404,17 @@ jq -n \
   --arg projects "$PROJECTS" \
   --argjson backlog "$BACKLOG_JSON" \
   --argjson tasks "$TASKS_JSON" \
+  --argjson scout_reports "$SCOUT_REPORTS_JSON" \
   'def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
+   def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
+   def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");
    {
      schema:"fm-fleet-snapshot.v1",
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),
-     scout_reports:($tasks | map(select(.paths.report.present == true) | {id:.id,path:.paths.report.path,kind:.kind})),
+     scout_reports:($scout_reports | map(. + {kind:report_kind(.id)})),
      secondmate_guidance:{
        note:"For kind=secondmate, send marked supervisor requests with fm-send and read the status/doc return channel; do not routinely fm-peek the secondmate chat for answers."
      }
