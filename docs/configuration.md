@@ -138,53 +138,8 @@ The shell scripts do not match those rules; firstmate chooses the best matching 
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
+The canonical schema, array `use` form, `select` strategies, and quota-balanced fallback contract live in `AGENTS.md` section 4.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
-
-### Schema
-
-```json
-{
-  "rules": [
-    {
-      "when": "<natural-language condition describing a kind of task>",
-      "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
-      ],
-      "select": "<optional strategy>",
-      "why": "<optional rationale that helps firstmate choose>"
-    }
-  ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
-}
-```
-
-Per rule, `when` and `use` are required.
-A single-object `use` needs `harness`, and every array profile needs `harness`.
-`use` may be a single profile object or an ordered array of profile objects.
-The single-object form stays fully backward-compatible.
-`use.model`, `use.effort`, and `why` are optional.
-`select` is optional and currently supports `quota-balanced`.
-Absent `select` means use the first array element, or the only object in the single-object form.
-The first array element is the deterministic tie-break and the ultimate fallback.
-`default` is optional.
-An omitted model or effort means the selected harness uses its own default for that axis.
-If the selected profile asks for an effort value the selected harness does not accept, `fm-spawn` records the requested `effort=` in meta for traceability but omits the launch flag so the harness starts successfully; bootstrap reports this as a `CREW_DISPATCH` diagnostic when it can see the invalid harness/effort pair.
-
-### quota-balanced selection
-
-`quota-balanced` is deterministic.
-It runs `quota-axi --json`.
-For each candidate vendor, it uses the minimum `percentRemaining` across that vendor's general windows only: Claude `five_hour` and `seven_day`, Codex `five_hour` and `weekly`.
-It ignores model-scoped windows such as `model:fable` and `model:codex_bengalfox:*`.
-The vendor with the higher minimum remaining quota wins.
-An exact tie between candidates with equally trusted freshness uses the first array element.
-If one candidate is fresh and another is stale but still has cached general-window numbers, the stale numbers are usable, but the fresh candidate wins unless the stale candidate's minimum is at least 20 percentage points higher.
-That 20 point stale-clear margin is the documented definition of "clearly less constrained".
-If `quota-axi` is missing, exits non-zero, or returns unparseable JSON, `bin/fm-dispatch-select.sh` logs the reason to stderr and prints the first array element.
-If a candidate vendor is absent from quota output, or has no usable general windows, that vendor is unavailable.
-If at least one candidate is available, choose among the available candidates.
-If no candidate is usable, `bin/fm-dispatch-select.sh` logs the reason and prints the first array element.
-Quota trouble must never block dispatch.
 When the file exists, bootstrap validates it with `jq`.
 Valid files produce a `CREW_DISPATCH: active config/crew-dispatch.json` block that lists each rule and prints `default:` when present.
 Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
@@ -207,7 +162,6 @@ The locked session-start bootstrap step also runs a best-effort project clone re
 It emits `FLEET_SYNC:` for skipped refreshes that may matter, recovered self-heals, and `STUCK:` alarms.
 Normal completed runs keep local-only and no-origin skips silent.
 If bootstrap kills a timed-out refresh, it replays any completed `fm-fleet-sync.sh` output before the aggregate timeout skip so no finished result is lost.
-The fleet refresh is bounded by `FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT` seconds when set, otherwise by a fleet-size-aware default with a 20 second floor; a timeout is reported as a `FLEET_SYNC` skip and does not block startup.
 The locked session-start bootstrap step also runs the guarded local secondmate sync for recorded live secondmate homes, then propagates declared inheritable local config into each validated live home.
 It emits `SECONDMATE_SYNC:` only when a home was skipped for an actionable sync reason or config inheritance failed, and `NUDGE_SECONDMATES:` only when a running home advanced and its instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed.
 `NUDGE_SECONDMATES:` lists stable `fm-<id>` task selectors; `AGENTS.md` section 3 owns the send procedure.
