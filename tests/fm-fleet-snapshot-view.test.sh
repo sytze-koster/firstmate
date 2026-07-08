@@ -268,6 +268,7 @@ test_backlog_tasks_axi_forms_and_overrides() {
 
 ## Done
 - [x] done-comma - Done Comma Task https://github.com/kunchenguid/firstmate/pull/42 (repo: gamma, merged 2026-07-09) (kind: ship)
+- [x] done-bracket-pr - Done Bracket PR - <https://github.com/kunchenguid/firstmate/pull/43> (repo: gamma, merged 2026-07-12) (kind: ship)
 - [x] reported-comma - Reported Scout data/reported-comma/report.md (repo: gamma, reported 2026-07-10) (kind: scout)
 - [x] done-note - Done Note local main (repo: delta, done 2026-07-11) (kind: ship)
 EOF
@@ -321,6 +322,14 @@ EOF
       and .completion == {verb:"merged",date:"2026-07-09"}
   ' >/dev/null || fail "done comma metadata did not split"
   printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "done-bracket-pr")
+    | .repo == "gamma"
+      and .title == "Done Bracket PR"
+      and .pr_url == "https://github.com/kunchenguid/firstmate/pull/43"
+      and .links == ["https://github.com/kunchenguid/firstmate/pull/43"]
+      and .completion == {verb:"merged",date:"2026-07-12"}
+  ' >/dev/null || fail "bracketed PR artifact did not parse"
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "reported-comma")
     | .repo == "gamma"
       and .title == "Reported Scout"
@@ -346,6 +355,8 @@ EOF
     "view should render bold in-flight row from snapshot"
   assert_contains "$view" "| blocked-reason | Blocked Reason | beta | ship | queued-comma - waits on queued-comma | - |" \
     "view should render blocked reason without title metadata"
+  assert_contains "$view" "| done-bracket-pr | Done Bracket PR | gamma | ship | - | https://github.com/kunchenguid/firstmate/pull/43 |" \
+    "view should render bracketed PR artifact outside the title"
   assert_contains "$view" "| done-note | Done Note | delta | ship | - | local main |" \
     "view should render local-only done artifact outside the title"
   pass "snapshot parses tasks-axi rows and respects operational overrides"

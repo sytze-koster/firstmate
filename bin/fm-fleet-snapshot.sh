@@ -171,7 +171,9 @@ backlog_json() {
       cap($rest; ".*(?:\\(|,[[:space:]]*)" + $key + ":[[:space:]]*(?<v>[^,)]*)");
     def metadata_word($rest; $key):
       cap($rest; ".*(?:\\(|,[[:space:]]*)" + $key + "[[:space:]]+(?<v>[^,)]*)");
-    def links($rest): [$rest | scan("https?://[^[:space:])\"]+")];
+    def url_pattern: "https?://[^[:space:])\"<>]+";
+    def wrapped_url_pattern: "<?" + url_pattern + ">?";
+    def links($rest): [$rest | scan(url_pattern)];
     def strip_trailing_metadata:
       reduce range(0; 20) as $_ (.;
         sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
@@ -179,7 +181,8 @@ backlog_json() {
       sub("[[:space:]]+-[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
       | sub("[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
       | sub("[[:space:]]+-[[:space:]]+local main$"; "")
-      | sub("[[:space:]]+local main$"; "");
+      | sub("[[:space:]]+local main$"; "")
+      | sub("[[:space:]]+-[[:space:]]*$"; "");
     def clean_title:
       strip_trailing_metadata
       | strip_title_artifacts
@@ -187,7 +190,7 @@ backlog_json() {
       | trim;
     def title_of($rest):
       $rest
-      | gsub("https?://[^[:space:])\"]+"; "")
+      | gsub(wrapped_url_pattern; "")
       | sub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:])]+[[:space:]]+-[[:space:]]+.*$"; "")
       | gsub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:]]+"; "")
       | clean_title;
