@@ -338,7 +338,7 @@ task_json_lines() {
           home:$home_path,
           report:$report
         },
-        secondmate_projects:($projects | if . == "" then [] else split(",") end),
+        secondmate_projects:($projects | if . == "" then [] else split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(. != "")) end),
         current_state:$current_state,
         endpoint:{target:($target | if . == "" then null else . end),exists:$endpoint_exists,agent_alive:$agent_alive},
         pr:{url:($pr | if . == "" then null else . end),source:$pr_source},

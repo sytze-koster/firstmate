@@ -31,7 +31,12 @@ done
 case "${1:-}" in
   display-message)
     case "$*" in
-      *pane_current_command*) printf 'codex\n' ;;
+      *pane_current_command*)
+        case "$target" in
+          *dead-secondmate*) printf 'zsh\n' ;;
+          *) printf 'codex\n' ;;
+        esac
+        ;;
       *) printf '%%1\n' ;;
     esac
     ;;
@@ -99,7 +104,7 @@ EOF
     "kind=secondmate" \
     "mode=secondmate" \
     "home=$home/secondmate-home" \
-    "projects=alpha,beta"
+    "projects=alpha, beta, gamma, "
   printf 'working: watching delegated scope\n' > "$home/state/secondmate-task.status"
   fm_write_meta "$home/state/cmux-task.meta" \
     "backend=cmux" \
@@ -148,7 +153,9 @@ test_fixture_snapshot_json() {
   ' >/dev/null || fail "scout report pointer missing"
   printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "secondmate-task")
-    | .actions.watch | contains("do not routinely fm-peek")
+    | .secondmate_projects == ["alpha","beta","gamma"]
+      and .endpoint.agent_alive == "alive"
+      and (.actions.watch | contains("do not routinely fm-peek"))
   ' >/dev/null || fail "secondmate return-channel guidance missing"
   printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "cmux-task")
@@ -244,12 +251,34 @@ test_view_renders_snapshot() {
     "view should render done backlog row"
   assert_contains "$view" "bin/fm-send.sh fm-secondmate-task" \
     "view should show secondmate send guidance"
+  assert_contains "$view" "| secondmate-task | working / status-log | secondmate | $home/secondmate-home | tmux | present / alive |" \
+    "view should show secondmate endpoint agent liveness"
   assert_not_contains "$view" "fm-peek.sh fm-secondmate-task" \
     "view must not tell firstmate to routinely peek secondmates"
   pass "fleet view renders the snapshot without secondmate peek guidance"
+}
+
+test_view_renders_dead_secondmate_agent_status() {
+  local home fakebin view
+  home=$(make_home dead-secondmate)
+  fm_write_meta "$home/state/dead-secondmate.meta" \
+    "window=firstmate:fm-dead-secondmate" \
+    "project=$home/secondmate-home" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "home=$home/secondmate-home" \
+    "projects=alpha, beta"
+  printf 'working: watching delegated scope\n' > "$home/state/dead-secondmate.status"
+  fakebin=$(make_fakebin "$home")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead |" \
+    "view should distinguish a present secondmate endpoint from a dead agent"
+  pass "fleet view renders secondmate agent liveness"
 }
 
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
+test_view_renders_dead_secondmate_agent_status
