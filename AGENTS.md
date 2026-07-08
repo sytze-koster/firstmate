@@ -145,48 +145,26 @@ Tell the captain another active session is already managing the work and operate
 
 Bootstrap is detect, then consent, then install.
 Never install anything the captain has not approved in this session.
-The locked fleet-sync sweep runs via `bin/fm-fleet-sync.sh`, best-effort and non-fatal, under the hard-rule exception in section 1 (set `FM_FLEET_PRUNE=0` to temporarily disable that branch pruning).
-The locked local secondmate sync sweep fast-forwards every live secondmate home's worktree to firstmate's own current default-branch commit so the fleet stays converged on whatever version firstmate is on.
-The live set comes from `state/<id>.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
-This is a purely local fast-forward (every secondmate home is a worktree of this same repo, sharing one object store), never a fetch from origin and never a surprise pull: the version followed is simply whatever the primary is currently on, which only the captain changes deliberately via `git pull` or `/updatefirstmate`.
-A tracked-files fast-forward never touches the gitignored operational dirs, so a secondmate's backlog, projects, and in-flight work are never disturbed; a dirty, diverged, or in-flight home is skipped untouched.
-The same sweep also propagates the primary's declared inheritable config (`config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`; sections 4 and 10) into each live secondmate home's `config/`, so every secondmate's own crewmates, dispatch profiles, and backlog backend stay on the primary's settings.
-Because `config/` is gitignored this is a separate, primary-authoritative copy independent of the tracked-files fast-forward: it re-converges every live home whether or not its tracked files advanced, and it touches only the declared inheritable items (never `config/secondmate-harness`).
-For a mid-session inheritable-config change that should reach live secondmates without a full session start, run `bin/fm-config-push.sh`.
-It is config-only: it uses the same live secondmate discovery and the same `propagate_inheritable_config` helper as bootstrap, prints a per-home/per-item summary, does not fast-forward tracked files, and does not nudge secondmates.
-The propagation helper itself keeps stdout silent for existing callers, but warns on stderr when an item is skipped because the destination does not allow it or when a copy/remove error occurs.
-The sweep reports the `NUDGE_SECONDMATES:` line below only when a running secondmate actually advanced with an instruction-surface change (`AGENTS.md`, `bin/`, or `.agents/skills/`), so firstmate knows which ones to live-converge.
+The locked bootstrap sweep runs three things automatically: a fleet-sync via `bin/fm-fleet-sync.sh` (best-effort, non-fatal, under the hard-rule exception in section 1; set `FM_FLEET_PRUNE=0` to temporarily disable branch pruning), a local fast-forward of every live secondmate home to firstmate's own current default-branch commit (never a fetch from origin, never touching gitignored operational dirs, so a dirty/diverged/in-flight home is skipped untouched), and propagation of the primary's inheritable config (`config/crew-dispatch.json`, `config/crew-harness`, `config/backlog-backend`) into each live secondmate home.
+The full mechanism - live-set discovery, what triggers a skip, and the propagation helper's contract - is documented in `docs/configuration.md` "Toolchain".
+For a mid-session config-only push without a full session start, run `bin/fm-config-push.sh`.
 Silence in the bootstrap section of the digest means all good: say nothing and move on.
-Otherwise it prints one line per problem or capability fact; handle each:
+Otherwise it prints one line per problem or capability fact; the full meaning of each line lives in `docs/configuration.md` "Toolchain" and "Crew dispatch profiles" - react to each as follows:
 
 - `MISSING: <tool> (install: <command>)` - list the missing tools to the captain with a one-line purpose each plus the printed install commands, wait for consent (one approval may cover the list), then run `bin/fm-bootstrap.sh install <approved tools...>`.
-  For `treehouse`, this also covers an installed version whose `treehouse get` lacks `--lease`; treat it as an upgrade request.
-  For `no-mistakes`, this also covers an installed version older than 1.31.2, because crewmate validation briefs delegate gate mechanics to no-mistakes' version-matched guidance.
-  For `tasks-axi`, this also covers an installed build whose `tasks-axi --version` is older than 0.1.1; `config/backlog-backend=manual` only suppresses the `TASKS_AXI: available` capability line, not this missing-tool report.
-  For `quota-axi`, bootstrap requires it because crew-dispatch `quota-balanced` may call it; `bin/fm-dispatch-select.sh` still degrades at runtime when quota data is unavailable.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
-- `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; section 8 explains why this guard exists and what it protects.
-  The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.
-  This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing.
+- `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; restore it with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.
+  This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing; section 8 explains why this guard exists.
 - `CREW_HARNESS_OVERRIDE: <name>` - record and use the override silently; surface a harness fact only if it actually blocks work or the captain asks.
-- `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; continue with the normal fallback chain, resolve and pass the chosen fallback harness explicitly while the file remains present, fix the malformed schema, unverified harness name, unknown selector, or invalid harness/effort pair when convenient, and do not select a bad profile.
-- `CREW_DISPATCH: active config/crew-dispatch.json` - bootstrap validated the optional dispatch profile file and printed its active rules and `default:` when present.
-  Keep this block top-of-mind during intake; it is the reminder that every crewmate or scout dispatch must consult the rules before spawning.
-- `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
-- `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.
-- `FLEET_SYNC: <repo>: STUCK: on <state>, N commits behind <base> - needs attention` - the clone is dirty, on a non-default branch, detached with unique commits, or diverged, so the sync left it untouched (never forcing or discarding); it will keep falling behind until you look. A loud STUCK, especially a growing N across bootstraps, means that clone needs hands-on attention; dispatch a crewmate or resolve it before it strands work.
-- `SECONDMATE_SYNC: secondmate <id>: skipped: <reason>` - the local-HEAD secondmate sync left a live secondmate home on its existing checkout because the home was dirty, diverged, unsafe, on the wrong branch, missing the primary target commit, or otherwise not fast-forwardable; bootstrap continued, but inspect the reason because the secondmate may be stale after a primary update.
-- `SECONDMATE_LIVENESS: secondmate <id>: already-live|respawned|skipped: <reason>|respawn failed: <reason>` - the session-start liveness sweep checked a live secondmate's recorded endpoint for a real agent process.
-  Treat `already-live` and `respawned` as handled; investigate `skipped` or `respawn failed` because that secondmate is not guaranteed live.
-- `TASKS_AXI: available` - a default-backend capability fact, not a problem; record it silently and use section 10 for backlog mutations.
-  It prints only when `config/backlog-backend` is absent or set to `tasks-axi` and the compatibility probe accepts `tasks-axi --version` as 0.1.1 or newer.
-  When the backend is opted out with `manual`, firstmate hand-edits and bootstrap stays silent here even if compatible `tasks-axi` is installed.
-- `NUDGE_SECONDMATES: fm-<id>...` - the secondmate sweep fast-forwarded one or more *running* secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; for each listed `fm-<id>` selector, send a one-line re-read nudge with `bin/fm-send.sh fm-<id> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` so meta resolves the current backend target even when the same session-start run also respawned the secondmate.
-  This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
-  A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
+- `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - continue with the normal fallback chain, resolve and pass the chosen fallback harness explicitly while the file remains present, and fix the reported problem when convenient.
+- `CREW_DISPATCH: active config/crew-dispatch.json` - keep this block top-of-mind during intake; it is the reminder that every crewmate or scout dispatch must consult the rules before spawning.
+- `FLEET_SYNC: <repo>: skipped/recovered: ...` - benign; investigate only if it blocks work.
+- `FLEET_SYNC: <repo>: STUCK: on <state>, N commits behind <base> - needs attention` - a loud STUCK, especially a growing N across bootstraps, means that clone needs hands-on attention; dispatch a crewmate or resolve it before it strands work.
+- `SECONDMATE_SYNC: secondmate <id>: skipped: <reason>` - inspect the reason because the secondmate may be stale after a primary update.
+- `SECONDMATE_LIVENESS: secondmate <id>: already-live|respawned|skipped: <reason>|respawn failed: <reason>` - treat `already-live` and `respawned` as handled; investigate `skipped` or `respawn failed` because that secondmate is not guaranteed live.
+- `TASKS_AXI: available` - a capability fact, not a problem; record it silently and use section 10 for backlog mutations.
+- `NUDGE_SECONDMATES: fm-<id>...` - for each listed `fm-<id>` selector, send a one-line re-read nudge with `bin/fm-send.sh fm-<id> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'`
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts; follow section 14 for watcher cadence restart only when a running watcher needs the transition applied immediately.
-
-Bootstrap's fleet refresh is bounded by `FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT` seconds when set, otherwise by a fleet-size-aware default with a 20 second floor; a timeout is reported as a `FLEET_SYNC` skip and does not block startup.
 
 The digest's context section already contains `data/projects.md`, the fleet registry of what each project is; `data/secondmates.md`, the registered secondmate routing table used to route work by scope (section 7); `data/captain.md`, this captain's curated preferences and working style; and `data/learnings.md`, fleet-local operational facts and gotchas this home has captured.
 Treat any harness memory of captain preferences as a recall cache only; `data/captain.md` is the canonical, harness-portable home.
@@ -214,35 +192,7 @@ When the captain expresses a standing preference such as "use grok for news-depe
 The file is JSON so firstmate can read the natural-language rules and bootstrap can validate it with `jq`.
 When the file is valid, bootstrap prints a concise `CREW_DISPATCH: active config/crew-dispatch.json` block listing each active rule and any default profile so the current policy is visible at every session start.
 See `docs/examples/crew-dispatch.json` for a documented starting point to copy into local `config/crew-dispatch.json`.
-
-Schema:
-
-```json
-{
-  "rules": [
-    {
-      "when": "<natural-language condition describing a kind of task>",
-      "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
-      ],
-      "select": "<optional strategy>",
-      "why": "<optional rationale that helps firstmate choose>"
-    }
-  ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
-}
-```
-
-Per rule, `when` and `use` are required.
-A single-object `use` needs `harness`, and every array profile needs `harness`.
-`use` may be a single profile object or an ordered array of profile objects.
-The single-object form stays fully backward-compatible.
-`use.model`, `use.effort`, and `why` are optional.
-`select` is optional and currently supports `quota-balanced`.
-Absent `select` means use the first array element, or the only object in the single-object form.
-The first array element is the deterministic tie-break and the ultimate fallback.
-`default` is optional.
-An omitted model or effort means the selected harness uses its own default for that axis.
+The full schema (`rules`, `use`, `select`, `default`) lives in `docs/configuration.md` "Crew dispatch profiles"; read it before hand-editing or troubleshooting the file.
 
 When `config/crew-dispatch.json` is present, read it during intake before every crewmate or scout dispatch.
 Pick the single best-fit rule using your own judgment.
@@ -256,20 +206,7 @@ This is enforced: when `config/crew-dispatch.json` exists, `bin/fm-spawn.sh` ref
 That refusal is the consultation backstop, so the rules are never silently skipped.
 The requirement is gated only on the file's presence; when the file is absent, `fm-spawn.sh` keeps resolving the crewmate harness from `config/crew-harness` as before.
 Secondmate launches are exempt because they resolve through `fm-harness.sh secondmate`, not the crewmate dispatch-profile rules.
-
-`quota-balanced` is deterministic.
-It runs `quota-axi --json`.
-For each candidate vendor, it uses the minimum `percentRemaining` across that vendor's general windows only: Claude `five_hour` and `seven_day`, Codex `five_hour` and `weekly`.
-It ignores model-scoped windows such as `model:fable` and `model:codex_bengalfox:*`.
-The vendor with the higher minimum remaining quota wins.
-An exact tie between candidates with equally trusted freshness uses the first array element.
-If one candidate is fresh and another is stale but still has cached general-window numbers, the stale numbers are usable, but the fresh candidate wins unless the stale candidate's minimum is at least 20 percentage points higher.
-That 20 point stale-clear margin is the documented definition of "clearly less constrained".
-If `quota-axi` is missing, exits non-zero, or returns unparseable JSON, `bin/fm-dispatch-select.sh` logs the reason to stderr and prints the first array element.
-If a candidate vendor is absent from quota output, or has no usable general windows, that vendor is unavailable.
-If at least one candidate is available, choose among the available candidates.
-If no candidate is usable, `bin/fm-dispatch-select.sh` logs the reason and prints the first array element.
-Quota trouble must never block dispatch.
+For a rule with `select: "quota-balanced"`, pipe the full rule JSON to `bin/fm-dispatch-select.sh`; its deterministic selection logic (per-vendor quota windows, the stale-clear margin, and the missing-quota fallback) is documented in `docs/configuration.md` "Crew dispatch profiles" - quota trouble must never block dispatch.
 
 Precedence, highest first:
 
@@ -518,7 +455,9 @@ Dispatch several tasks in one call by passing `id=repo` pairs instead of a singl
 If one pair fails, the rest still run and the batch exits non-zero.
 When `config/crew-dispatch.json` exists, include a shared `--harness` for every crewmate or scout batch after consulting the dispatch rules.
 
-The script resolves the harness (`fm-harness.sh crew` for crewmate/scout tasks only when `config/crew-dispatch.json` is absent, `fm-harness.sh secondmate` for `kind=secondmate`; section 4), resolves the runtime backend (`--backend`, then `FM_BACKEND`, then `config/backend`, then runtime auto-detection - the runtime firstmate itself is executing inside, from `$TMUX`/`HERDR_ENV=1`/cmux runtime signals, nesting resolved innermost-first (`$TMUX`, then `HERDR_ENV=1`, then cmux's primary `CMUX_WORKSPACE_ID` marker and documented macOS-only fallbacks last, since cmux is a terminal application rather than a nestable multiplexer; docs/cmux-backend.md "Runtime auto-detection") - then `tmux`; an auto-detected herdr or cmux spawn prints a loud stderr notice, auto-detected tmux stays silent; zellij and orca are never auto-detected, only explicit `--backend <name>`/`FM_BACKEND=<name>`/`config/backend`), validates the requested backend against spawn-capable adapters, rejects `codex-app` as unknown, owns the verified launch templates, resolves the project's delivery mode (`fm-project-mode.sh`) for ship/scout tasks, and records `harness=`, `model=`, `effort=`, `kind=`, `mode=`, and `yolo=` in the task's meta; only a non-default runtime backend is recorded as `backend=` because absent means tmux.
+The script resolves the harness (`fm-harness.sh crew` for crewmate/scout tasks only when `config/crew-dispatch.json` is absent, `fm-harness.sh secondmate` for `kind=secondmate`; section 4) and resolves the runtime backend in order: `--backend`, then `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then `tmux`.
+The auto-detection nesting rule, per-backend stderr notices, and version/dependency gates are documented in `docs/configuration.md` "Runtime backend"; read it before troubleshooting a backend spawn refusal.
+It also validates the requested backend against spawn-capable adapters, rejects `codex-app` as unknown, owns the verified launch templates, resolves the project's delivery mode (`fm-project-mode.sh`) for ship/scout tasks, and records `harness=`, `model=`, `effort=`, `kind=`, `mode=`, and `yolo=` in the task's meta; only a non-default runtime backend is recorded as `backend=` because absent means tmux.
 A backend spawn refusal - a missing dependency, an unauthenticated socket, or a version gate - must be surfaced to the captain as a blocker; never silently retry the spawn on a different backend to work around it.
 A non-flag third argument containing whitespace is treated as a raw launch command (only for verifying new adapters).
 When `config/crew-dispatch.json` exists, the script refuses crewmate or scout launches without an explicit harness because firstmate must have already resolved the profile choice at intake.
@@ -529,8 +468,7 @@ For ship and scout tasks, tmux/herdr/zellij/cmux create a runtime endpoint and r
 Selecting `backend=codex-app` fails as an unknown backend; see `docs/codex-app-backend.md`.
 For grok, the turn-end hook is one firstmate-owned global hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, activated only when the worktree holds the per-task `.fm-grok-turnend` token pointer that matches `state/<id>.grok-turnend-token`; teardown removes the pointer and token.
 For `kind=secondmate`, the script creates the same kind of runtime endpoint but starts directly in the persistent home.
-With herdr, ordinary crewmate and scout spawns use the current `FM_HOME` workspace; a primary `--secondmate` spawn uses the secondmate target home's workspace, so secondmate-owned tabs do not mix into the primary `firstmate` space.
-With zellij there is no per-home workspace split: every task, primary or secondmate, lands as a tab in the one shared `firstmate` zellij session (docs/zellij-backend.md).
+Per-backend workspace/session scoping for herdr and zellij (which homes' tabs land where) is documented in `docs/configuration.md` "Runtime backend".
 Before launching a secondmate, the script fast-forwards its home worktree to firstmate's own current default-branch commit, so a freshly spawned or recovery-respawned secondmate always starts on firstmate's current version.
 This is a purely local fast-forward of tracked files - never a fetch from origin, and never touching the gitignored operational dirs - so the secondmate's backlog, projects, and any prior in-flight work are untouched; a dirty, diverged, or in-flight home is left as-is and launches unchanged.
 If that pre-launch fast-forward is skipped, `fm-spawn.sh` prints a concise warning to stderr and still launches the secondmate from its unchanged checkout.
