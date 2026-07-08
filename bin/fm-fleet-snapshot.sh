@@ -172,13 +172,24 @@ backlog_json() {
     def metadata_word($rest; $key):
       cap($rest; ".*(?:\\(|,[[:space:]]*)" + $key + "[[:space:]]+(?<v>[^,)]*)");
     def links($rest): [$rest | scan("https?://[^[:space:])\"]+")];
+    def strip_trailing_metadata:
+      reduce range(0; 20) as $_ (.;
+        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
     def title_of($rest):
       $rest
       | gsub("https?://[^[:space:])\"]+"; "")
       | gsub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:]]+"; "")
-      | gsub("[[:space:]]*\\([^)]*\\)"; "")
+      | strip_trailing_metadata
       | gsub("[[:space:]]+"; " ")
       | trim;
+    def completion($rest):
+      (metadata_word($rest; "merged")) as $merged
+      | (metadata_word($rest; "reported")) as $reported
+      | (metadata_word($rest; "done")) as $done
+      | if $merged != null then {verb:"merged",date:$merged}
+        elif $reported != null then {verb:"reported",date:$reported}
+        elif $done != null then {verb:"done",date:$done}
+        else {verb:null,date:null} end;
     def row_match($line):
       (($line | capture("^[-*][[:space:]]+\\[(?<check>[ xX])\\][[:space:]]+(?<id>[^[:space:]]+)[[:space:]]+-[[:space:]]+(?<rest>.*)$")?) //
        (($line | capture("^[-*][[:space:]]+\\*\\*(?<id>[^*]+)\\*\\*[[:space:]]+-[[:space:]]+(?<rest>.*)$")?)
@@ -204,6 +215,9 @@ backlog_json() {
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
              since:metadata_word($rest; "since"),
              merged:metadata_word($rest; "merged"),
+             reported:metadata_word($rest; "reported"),
+             done:metadata_word($rest; "done"),
+             completion:completion($rest),
              links:links($rest),
              pr_url:((links($rest) | map(select(test("/pull/[0-9]+"))) | .[0]) // null),
              report_path:cap($rest; ".*(?<v>data/[^[:space:])]+/report\\.md).*"),
